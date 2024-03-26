@@ -1,0 +1,76 @@
+image: docker:19.03.10
+
+services:
+- docker:dind
+
+stages:
+- devbuild
+- devdeploy
+- uatbuild
+- uatdeploy
+
+before_script:
+- "which ssh-agent || ( apk add --update openssh git -q )"
+- eval $(ssh-agent -s)
+- echo "$PRIVATE_KEY" | tr -d '\r' | ssh-add -> /dev/null
+- mkdir -p ~/.ssh
+- chmod 700 ~/.ssh
+- touch ~/.ssh/known_hosts
+- chmod 644 ~/.ssh/known_hosts
+- apk add --no-cache curl jq python3 py3-pip
+- pip3 install awscli
+- export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+- export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+- export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+- aws --version
+
+Build Develop:
+  when: manual
+  stage: devbuild
+  script:
+  - aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com
+  - docker build -t tikkat-dev-api .
+  - docker tag tikkat-dev-api 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com/eventnex:tikkat-dev-api
+  - docker push 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com/eventnex:tikkat-dev-api
+  only:
+  - develop
+  tags:
+  - node
+
+Deploy Develop:
+  when: on_success
+  needs: ["Build Develop"]
+  stage: devdeploy
+  script:
+  - ssh-keyscan $DEV_SERVER >> ~/.ssh/known_hosts
+  - ssh ${DEV_USER}@${DEV_SERVER} -t 'ansible-playbook /home/ubuntu/devops/tikkat/dev/apideploy.yml -e "@/home/ubuntu/devops/tikkat/dev/tikkat-dev-api.json"'
+  only:
+  - develop
+  tags:
+  - node
+
+Build UAT:
+  when: manual
+  stage: uatbuild
+  script:
+  - aws ecr get-login-password --region ap-southeast-1 | docker login --username AWS --password-stdin 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com
+  - docker build -t tikkat-uat-api .
+  - docker tag tikkat-uat-api 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com/eventnex:tikkat-uat-api
+  - docker push 070710219589.dkr.ecr.ap-southeast-1.amazonaws.com/eventnex:tikkat-uat-api
+  only:
+  - uat
+  tags:
+  - node
+
+Deploy UAT:
+  when: on_success
+  needs: ["Build UAT"]
+  stage: uatdeploy
+  script:
+  - ssh-keyscan $UAT_SERVER >> ~/.ssh/known_hosts
+  - ssh ${UAT_USER}@${UAT_SERVER} -t 'ansible-playbook /home/ubuntu/devops/tikkat/uat/apideploy.yml -e "@/home/ubuntu/devops/tikkat/uat/tikkat-uat.json"'
+  only:
+  - uat
+  tags:
+  - node
+
